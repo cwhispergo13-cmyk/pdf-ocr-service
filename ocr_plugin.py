@@ -6,14 +6,21 @@ ocrmypdf가 검색 가능한 PDF 텍스트 레이어를 생성하도록 합니�
 
 import base64
 import os
+from collections import namedtuple
 from pathlib import Path
 
 import requests
 from ocrmypdf import OcrEngine, hookimpl
 
+OrientationConfidence = namedtuple("OrientationConfidence", ["angle", "confidence"])
+
 
 class GoogleVisionOcrEngine(OcrEngine):
     """Google Cloud Vision API를 사용하는 OCR 엔진"""
+
+    @staticmethod
+    def __str__():
+        return "Google Cloud Vision API"
 
     @staticmethod
     def creator_tag(options):
@@ -26,6 +33,10 @@ class GoogleVisionOcrEngine(OcrEngine):
     @staticmethod
     def languages(options):
         return {"eng", "kor", "jpn", "chi_sim", "chi_tra"}
+
+    @staticmethod
+    def get_orientation(input_file, options):
+        return OrientationConfidence(angle=0, confidence=0.0)
 
     @staticmethod
     def generate_hocr(input_file, output_hocr, output_text, options):
