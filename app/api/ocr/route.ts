@@ -1,7 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
+import { PDFDocument, rgb } from 'pdf-lib'
+import fontkit from '@pdf-lib/fontkit'
+import fs from 'fs'
+import path from 'path'
 
 const VISION_API_URL = 'https://vision.googleapis.com/v1/files:annotate'
+
+// 한국어 폰트 캐시
+let cachedFontBytes: Buffer | null = null
+
+function getFontBytes(): Buffer {
+  if (cachedFontBytes) return cachedFontBytes
+
+  // 프로젝트 루트의 fonts 디렉토리에서 폰트 로드
+  const fontPath = path.join(process.cwd(), 'fonts', 'NotoSansKR-Regular.otf')
+  cachedFontBytes = fs.readFileSync(fontPath)
+  return cachedFontBytes
+}
 
 // 파일명에서 확장자 추출 및 _OCR 추가
 function generateOCRFileName(originalFileName: string): string {
@@ -61,7 +76,7 @@ interface VisionPageResponse {
   fullTextAnnotation?: VisionFullTextAnnotation
 }
 
-// Google Vision API로 PDF OCR 수행 (페이지별 텍스트 + 위치 정보 반환)
+// Google Vision API로 PDF OCR 수행
 async function performOCR(
   pdfBuffer: Buffer,
   apiKey: string,
@@ -119,15 +134,21 @@ async function performOCR(
   return allPageResponses
 }
 
-// 투명 텍스트 레이어를 PDF에 오버레이하여 Searchable PDF 생성
+// Searchable PDF 생성: 원본 PDF 위에 투명 텍스트 레이어 오버레이
 async function createSearchablePDF(
   pdfBuffer: Buffer,
   ocrResults: VisionPageResponse[]
 ): Promise<{ pdfBytes: Uint8Array; extractedText: string }> {
   const pdfDoc = await PDFDocument.load(pdfBuffer)
-  const pages = pdfDoc.getPages()
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
 
+  // fontkit 등록 (커스텀 폰트 사용을 위해 필수)
+  pdfDoc.registerFontkit(fontkit)
+
+  // 한국어 지원 폰트 임베드
+  const fontBytes = getFontBytes()
+  const customFont = await pdfDoc.embedFont(fontBytes, { subset: true })
+
+  const pages = pdfDoc.getPages()
   let fullExtractedText = ''
 
   for (let i = 0; i < pages.length && i < ocrResults.length; i++) {
@@ -143,7 +164,7 @@ async function createSearchablePDF(
     const pdfWidth = page.getWidth()
     const pdfHeight = page.getHeight()
 
-    // 스케일 팩터 계산 (Vision API 좌표 → PDF 좌표)
+    // 스케일 팩터 (Vision API 좌표 → PDF 좌표)
     const scaleX = pdfWidth / visionWidth
     const scaleY = pdfHeight / visionHeight
 
@@ -152,7 +173,7 @@ async function createSearchablePDF(
       fullExtractedText += pageText + '\n\n'
     }
 
-    // 블록 → 문단 → 단어 순서로 순회하며 투명 텍스트 배치
+    // 블록 → 문단 → 단어 순서로 투명 텍스트 배치
     const blocks = visionPage.blocks || []
     for (const block of blocks) {
       const paragraphs = block.paragraphs || []
@@ -169,39 +190,36 @@ async function createSearchablePDF(
 
           if (!wordText.trim()) continue
 
-          // Vision API 좌표 (왼쪽 상단 원점, y 아래로 증가)
+          // Vision API 좌표 (좌상단 원점, y 아래로 증가)
           const vx = vertices[0].x || 0
           const vy = vertices[0].y || 0
           const vx2 = vertices[2].x || 0
           const vy2 = vertices[2].y || 0
 
-          // 단어의 높이로 폰트 크기 추정
+          // 단어 높이/너비
           const wordHeight = Math.abs(vy2 - vy)
           const wordWidth = Math.abs(vx2 - vx)
-          const fontSize = Math.max(wordHeight * scaleY * 0.85, 1)
 
-          // PDF 좌표로 변환 (PDF는 왼쪽 하단 원점, y 위로 증가)
+          if (wordHeight <= 0 || wordWidth <= 0) continue
+
+          // 폰트 크기: Vision API 단어 높이를 PDF 스케일로 변환
+          const fontSize = Math.max(wordHeight * scaleY * 0.8, 2)
+
+          // PDF 좌표 변환 (PDF는 좌하단 원점, y 위로 증가)
           const pdfX = vx * scaleX
           const pdfY = pdfHeight - vy2 * scaleY
-
-          // 실제 텍스트 폭 계산 및 스케일 조정
-          const textWidth = font.widthOfTextAtSize(wordText, fontSize)
-          const targetWidth = wordWidth * scaleX
-          const horizontalScale = textWidth > 0 ? targetWidth / textWidth : 1
 
           try {
             page.drawText(wordText, {
               x: pdfX,
               y: pdfY,
               size: fontSize,
-              font: font,
+              font: customFont,
               color: rgb(0, 0, 0),
-              opacity: 0, // 투명 텍스트 (보이지 않지만 선택 가능)
-              wordBreaks: [],
-              maxWidth: targetWidth > 0 ? targetWidth / horizontalScale : undefined,
+              opacity: 0.01, // 거의 투명하지만 PDF 뷰어에서 선택 가능
             })
           } catch {
-            // 특수문자 등으로 인한 오류 무시 (해당 단어 건너뜀)
+            // 폰트에 없는 특수문자 등은 건너뜀
             continue
           }
         }
@@ -239,7 +257,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // File 객체를 Buffer로 변환
+    // File → Buffer 변환
     const arrayBuffer = await file.arrayBuffer()
     const pdfBuffer = Buffer.from(arrayBuffer)
 
@@ -247,7 +265,7 @@ export async function POST(request: NextRequest) {
     const tempDoc = await PDFDocument.load(pdfBuffer)
     const totalPages = tempDoc.getPageCount()
 
-    // Google Vision API로 OCR 수행 (텍스트 + 위치 정보)
+    // Vision API로 OCR 수행 (텍스트 + 위치 좌표)
     const ocrResults = await performOCR(pdfBuffer, apiKey, totalPages)
 
     if (!ocrResults || ocrResults.length === 0) {
