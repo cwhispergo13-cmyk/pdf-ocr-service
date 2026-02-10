@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: pdf-ocr-service
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: GOOGLE_VISION_API_KEY
+        sync: false
