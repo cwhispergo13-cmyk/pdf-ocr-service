@@ -1,24 +1,25 @@
 FROM node:20-slim
 
-# Install Python, Tesseract OCR, ocrmypdf, and language packs
+# Install Python, Tesseract OCR (ocrmypdf dependency), Ghostscript, and tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     tesseract-ocr \
     tesseract-ocr-kor \
     tesseract-ocr-eng \
-    tesseract-ocr-jpn \
-    tesseract-ocr-chi-sim \
     ghostscript \
     unpaper \
     pngquant \
-    && pip3 install --break-system-packages ocrmypdf \
+    && pip3 install --break-system-packages ocrmypdf requests \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install dependencies
+# Copy plugin first (rarely changes)
+COPY ocr_plugin.py ./
+
+# Install Node.js dependencies
 COPY package*.json ./
 RUN npm ci
 
