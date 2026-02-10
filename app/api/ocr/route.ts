@@ -144,9 +144,9 @@ async function createSearchablePDF(
   // fontkit 등록 (커스텀 폰트 사용을 위해 필수)
   pdfDoc.registerFontkit(fontkit)
 
-  // 한국어 지원 폰트 임베드
+  // 한국어 지원 폰트 임베드 (subset: false로 인코딩 오류 방지)
   const fontBytes = getFontBytes()
-  const customFont = await pdfDoc.embedFont(fontBytes, { subset: true })
+  const customFont = await pdfDoc.embedFont(fontBytes, { subset: false })
 
   const pages = pdfDoc.getPages()
   let fullExtractedText = ''
