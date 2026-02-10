@@ -39,22 +39,25 @@ function generateOCRFileName(originalFileName: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const { pdfBase64, originalFileName } = body
+    // FormData로 파일 수신
+    const formData = await request.formData()
+    const file = formData.get('file') as File | null
+    const originalFileName = formData.get('originalFileName') as string | null
 
-    if (!pdfBase64 || !originalFileName) {
+    if (!file || !originalFileName) {
       return NextResponse.json(
-        { error: 'PDF 데이터와 파일명이 필요합니다' },
+        { error: 'PDF 파일과 파일명이 필요합니다' },
         { status: 400 }
       )
     }
 
+    // File 객체를 Buffer로 변환
+    const arrayBuffer = await file.arrayBuffer()
+    const pdfBuffer = Buffer.from(arrayBuffer)
+
     // Vision API 클라이언트 생성
     const client = getVisionClient()
 
-    // PDF를 이미지로 변환하고 OCR 수행
-    const pdfBuffer = Buffer.from(pdfBase64, 'base64')
-    
     // Google Vision API로 PDF OCR 수행
     const [result] = await client.documentTextDetection({
       image: {

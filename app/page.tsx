@@ -25,20 +25,17 @@ export default function Home() {
       // 상태를 processing으로 변경
       updateFileStatus(fileStatus.id, { status: 'processing', progress: 10 })
 
-      // PDF를 Base64로 변환
-      const base64 = await fileToBase64(fileStatus.originalFile)
+      // FormData로 파일 전송 (Base64 대신 multipart 방식)
+      const formData = new FormData()
+      formData.append('file', fileStatus.originalFile)
+      formData.append('originalFileName', fileStatus.originalName)
+
       updateFileStatus(fileStatus.id, { progress: 30 })
 
       // OCR API 호출
       const response = await fetch('/api/ocr', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          pdfBase64: base64,
-          originalFileName: fileStatus.originalName,
-        }),
+        body: formData,
       })
 
       updateFileStatus(fileStatus.id, { progress: 70 })
@@ -191,20 +188,6 @@ export default function Home() {
 }
 
 // Helper functions
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.readAsDataURL(file)
-    reader.onload = () => {
-      const result = reader.result as string
-      // "data:application/pdf;base64," 부분 제거
-      const base64 = result.split(',')[1]
-      resolve(base64)
-    }
-    reader.onerror = (error) => reject(error)
-  })
-}
-
 function base64ToBlob(base64: string, mimeType: string): Blob {
   const byteCharacters = atob(base64)
   const byteNumbers = new Array(byteCharacters.length)
