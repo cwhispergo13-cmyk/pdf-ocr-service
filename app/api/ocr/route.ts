@@ -1,44 +1,94 @@
 import { NextRequest, NextResponse } from 'next/server'
-import vision from '@google-cloud/vision'
 import { PDFDocument } from 'pdf-lib'
 
-// Google Vision API 클라이언트 초기화
-const getVisionClient = () => {
-  const apiKey = process.env.GOOGLE_VISION_API_KEY
-  
-  if (!apiKey) {
-    throw new Error('GOOGLE_VISION_API_KEY가 설정되지 않았습니다')
-  }
-
-  return new vision.ImageAnnotatorClient({
-    apiKey: apiKey,
-  })
-}
+const VISION_API_URL = 'https://vision.googleapis.com/v1/files:annotate'
 
 // 파일명에서 확장자 추출 및 _OCR 추가
 function generateOCRFileName(originalFileName: string): string {
-  // 파일명과 확장자 분리
   const lastDotIndex = originalFileName.lastIndexOf('.')
   
   if (lastDotIndex === -1) {
-    // 확장자가 없는 경우
     return `${originalFileName}_OCR.pdf`
   }
   
   const nameWithoutExt = originalFileName.substring(0, lastDotIndex)
-  const extension = originalFileName.substring(lastDotIndex).toLowerCase()
+  return `${nameWithoutExt}_OCR.pdf`
+}
+
+// Google Vision API로 PDF OCR 수행 (REST API 직접 호출)
+async function performOCR(pdfBuffer: Buffer, apiKey: string): Promise<string> {
+  const base64Content = pdfBuffer.toString('base64')
   
-  // .pdf 확장자인지 확인
-  if (extension === '.pdf') {
-    return `${nameWithoutExt}_OCR.pdf`
-  } else {
-    // .pdf가 아닌 경우에도 .pdf로 저장
-    return `${nameWithoutExt}_OCR.pdf`
+  // PDF 페이지 수 확인
+  const pdfDoc = await PDFDocument.load(pdfBuffer)
+  const totalPages = pdfDoc.getPageCount()
+  
+  // Google Vision API는 동기 요청 시 최대 5페이지까지 처리 가능
+  // 5페이지 이하면 한 번에, 초과하면 5페이지씩 나눠서 처리
+  const allTexts: string[] = []
+  const batchSize = 5
+  
+  for (let startPage = 1; startPage <= totalPages; startPage += batchSize) {
+    const endPage = Math.min(startPage + batchSize - 1, totalPages)
+    const pages = Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage + i)
+    
+    const requestBody = {
+      requests: [
+        {
+          inputConfig: {
+            content: base64Content,
+            mimeType: 'application/pdf',
+          },
+          features: [
+            {
+              type: 'DOCUMENT_TEXT_DETECTION',
+            },
+          ],
+          pages: pages,
+        },
+      ],
+    }
+
+    const response = await fetch(`${VISION_API_URL}?key=${apiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json()
+      throw new Error(
+        errorData.error?.message || `Vision API 오류: ${response.status}`
+      )
+    }
+
+    const data = await response.json()
+    
+    // 각 페이지의 텍스트 추출
+    const fileResponses = data.responses?.[0]?.responses || []
+    for (const pageResponse of fileResponses) {
+      const pageText = pageResponse.fullTextAnnotation?.text || ''
+      if (pageText) {
+        allTexts.push(pageText)
+      }
+    }
   }
+
+  return allTexts.join('\n\n--- 페이지 구분 ---\n\n')
 }
 
 export async function POST(request: NextRequest) {
   try {
+    const apiKey = process.env.GOOGLE_VISION_API_KEY
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'GOOGLE_VISION_API_KEY가 설정되지 않았습니다' },
+        { status: 500 }
+      )
+    }
+
     // FormData로 파일 수신
     const formData = await request.formData()
     const file = formData.get('file') as File | null
@@ -55,30 +105,18 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer()
     const pdfBuffer = Buffer.from(arrayBuffer)
 
-    // Vision API 클라이언트 생성
-    const client = getVisionClient()
-
     // Google Vision API로 PDF OCR 수행
-    const [result] = await client.documentTextDetection({
-      image: {
-        content: pdfBuffer,
-      },
-    })
+    const extractedText = await performOCR(pdfBuffer, apiKey)
 
-    const fullTextAnnotation = result.fullTextAnnotation
-    const extractedText = fullTextAnnotation?.text || ''
-
-    if (!extractedText) {
+    if (!extractedText.trim()) {
       return NextResponse.json(
-        { error: 'PDF에서 텍스트를 추출할 수 없습니다' },
+        { error: 'PDF에서 텍스트를 추출할 수 없습니다. 스캔된 이미지가 아닌 PDF이거나 빈 문서일 수 있습니다.' },
         { status: 400 }
       )
     }
 
-    // PDF 문서 로드 (메타데이터 유지를 위해)
+    // PDF 문서 로드 (메타데이터 업데이트)
     const pdfDoc = await PDFDocument.load(pdfBuffer)
-    
-    // PDF 저장 (원본 유지, 메타데이터만 업데이트)
     pdfDoc.setTitle(`${originalFileName} - OCR Processed`)
     pdfDoc.setProducer('PDF OCR Service - Google Vision API')
     pdfDoc.setCreationDate(new Date())
@@ -93,7 +131,7 @@ export async function POST(request: NextRequest) {
       success: true,
       newFileName,
       processedPdfBase64,
-      extractedText: extractedText.substring(0, 1000), // 첫 1000자만 반환
+      extractedText: extractedText.substring(0, 1000),
     })
   } catch (error) {
     console.error('OCR 처리 오류:', error)
