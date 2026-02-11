@@ -1,12 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import FileUploader from './components/FileUploader'
 import FileList from './components/FileList'
 import { FileStatus } from './types'
 
 export default function Home() {
   const [files, setFiles] = useState<FileStatus[]>([])
+  const [isProcessing, setIsProcessing] = useState(false)
+  const processingRef = useRef(false) // 순차 처리 제어용
 
   const handleFilesSelected = (selectedFiles: File[]) => {
     const newFiles: FileStatus[] = selectedFiles.map((file) => ({
@@ -22,8 +24,8 @@ export default function Home() {
 
   // 서버 깨우기 - 최대 60초까지 반복 시도 (Render 콜드 스타트 대응)
   const wakeUpServer = async (fileId: string): Promise<boolean> => {
-    const MAX_ATTEMPTS = 8        // 최대 8번 시도
-    const RETRY_DELAYS = [3000, 5000, 5000, 8000, 8000, 10000, 10000, 10000] // 점점 길게
+    const MAX_ATTEMPTS = 8
+    const RETRY_DELAYS = [3000, 5000, 5000, 8000, 8000, 10000, 10000, 10000]
 
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       try {
@@ -43,7 +45,6 @@ export default function Home() {
         // 네트워크 오류 - 서버가 아직 깨어나는 중
       }
 
-      // 마지막 시도가 아니면 대기 후 재시도
       if (i < MAX_ATTEMPTS - 1) {
         const delay = RETRY_DELAYS[i]
         updateFileStatus(fileId, {
@@ -56,31 +57,36 @@ export default function Home() {
     return false
   }
 
-  // 안전한 JSON 파싱 (빈 응답이나 HTML 에러 페이지 대응)
-  const safeJsonParse = async (response: Response): Promise<{ data: Record<string, unknown> | null; text: string }> => {
-    const text = await response.text()
-    try {
-      const data = JSON.parse(text)
-      return { data, text }
-    } catch {
-      return { data: null, text }
-    }
-  }
+  // 에러 응답에서 메시지 추출
+  const extractErrorMessage = async (response: Response): Promise<string> => {
+    const status = response.status
 
-  // 사용자 친화적 에러 메시지 변환
-  const getFriendlyErrorMessage = (text: string, status: number): string => {
     if (status === 502 || status === 503 || status === 504) {
       return '서버가 응답하지 않습니다. "다시 시도" 버튼을 눌러주세요.'
     }
     if (status === 413) {
       return '파일 크기가 서버 허용 한도를 초과했습니다. 더 작은 파일로 시도해주세요.'
     }
-    if (text.includes('<!DOCTYPE') || text.includes('<html')) {
-      return '서버가 정상적으로 응답하지 않았습니다. "다시 시도" 버튼을 눌러주세요.'
+
+    try {
+      const text = await response.text()
+      // JSON 에러 응답인지 확인
+      try {
+        const data = JSON.parse(text)
+        if (data && data.error) return String(data.error)
+      } catch {
+        // JSON이 아닌 경우
+      }
+      if (text.includes('<!DOCTYPE') || text.includes('<html')) {
+        return '서버가 정상적으로 응답하지 않았습니다. "다시 시도" 버튼을 눌러주세요.'
+      }
+      if (!text || text.length === 0) {
+        return '서버로부터 빈 응답을 받았습니다. "다시 시도" 버튼을 눌러주세요.'
+      }
+    } catch {
+      // 읽기 실패
     }
-    if (text === '' || text.length === 0) {
-      return '서버로부터 빈 응답을 받았습니다. "다시 시도" 버튼을 눌러주세요.'
-    }
+
     return `서버 오류 (${status}): "다시 시도" 버튼을 눌러주세요.`
   }
 
@@ -94,7 +100,7 @@ export default function Home() {
         error: undefined,
       })
 
-      // 1단계: 서버 깨우기 (최대 60초까지 인내심 있게 재시도)
+      // 1단계: 서버 깨우기
       const isServerAwake = await wakeUpServer(fileStatus.id)
       if (!isServerAwake) {
         throw new Error('서버가 깨어나지 않습니다. 1~2분 후 "다시 시도" 버튼을 눌러주세요.')
@@ -117,7 +123,7 @@ export default function Home() {
         try {
           updateFileStatus(fileStatus.id, {
             progress: attempt === 1 ? 30 : 25,
-            statusMessage: attempt === 1 ? 'OCR 처리 요청 중...' : 'OCR 재시도 중...',
+            statusMessage: attempt === 1 ? 'OCR 처리 중... (시간이 걸릴 수 있습니다)' : 'OCR 재시도 중...',
           })
 
           response = await fetch('/api/ocr', {
@@ -135,7 +141,7 @@ export default function Home() {
             continue
           }
 
-          break // 성공하거나 재시도 불가능한 에러면 루프 종료
+          break
         } catch (fetchError) {
           lastError = fetchError instanceof Error ? fetchError.message : '네트워크 오류'
           if (attempt < 2) {
@@ -149,42 +155,38 @@ export default function Home() {
       }
 
       if (!response) {
-        throw new Error(`서버 연결에 실패했습니다: ${lastError}. 인터넷 연결을 확인하고 "다시 시도" 버튼을 눌러주세요.`)
+        throw new Error(`서버 연결에 실패했습니다: ${lastError}. "다시 시도" 버튼을 눌러주세요.`)
       }
 
+      // 4단계: 응답 처리
       updateFileStatus(fileStatus.id, {
         progress: 70,
         statusMessage: '응답 처리 중...',
       })
 
-      // 4단계: 안전한 응답 파싱
-      const { data, text } = await safeJsonParse(response)
-
       if (!response.ok) {
-        if (data && typeof data === 'object' && 'error' in data) {
-          throw new Error(String(data.error))
-        }
-        throw new Error(getFriendlyErrorMessage(text, response.status))
+        const errorMsg = await extractErrorMessage(response)
+        throw new Error(errorMsg)
       }
 
-      if (!data) {
-        throw new Error(getFriendlyErrorMessage(text, response.status))
-      }
-
-      // 5단계: OCR 완료된 PDF를 Blob으로 변환
+      // 성공 응답: 바이너리 PDF를 직접 Blob으로 받기 (Base64 변환 없음 → 메모리 절약)
       updateFileStatus(fileStatus.id, {
-        progress: 90,
-        statusMessage: 'PDF 생성 중...',
+        progress: 85,
+        statusMessage: 'PDF 다운로드 중...',
       })
-      const pdfBlob = base64ToBlob(String(data.processedPdfBase64), 'application/pdf')
-      
+
+      const pdfBlob = await response.blob()
+      const newFileName = decodeURIComponent(
+        response.headers.get('X-OCR-FileName') || `${fileStatus.originalName.replace('.pdf', '')}_OCR.pdf`
+      )
+
       updateFileStatus(fileStatus.id, {
         status: 'completed',
         progress: 100,
         statusMessage: undefined,
-        newName: String(data.newFileName),
+        newName: newFileName,
         processedBlob: pdfBlob,
-        extractedText: String(data.extractedText),
+        extractedText: 'OCR 처리가 완료되었습니다. 다운로드된 PDF에서 텍스트를 드래그하여 확인하세요.',
       })
     } catch (error) {
       console.error('파일 처리 오류:', error)
@@ -196,6 +198,21 @@ export default function Home() {
     }
   }
 
+  // 파일들을 순차적으로 1개씩 처리 (서버 메모리 보호)
+  const processFilesSequentially = useCallback(async (filesToProcess: FileStatus[]) => {
+    if (processingRef.current) return // 이미 처리 중이면 중복 실행 방지
+    processingRef.current = true
+    setIsProcessing(true)
+
+    for (const fileStatus of filesToProcess) {
+      await processFile(fileStatus)
+    }
+
+    processingRef.current = false
+    setIsProcessing(false)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // 에러 발생한 파일을 다시 시도
   const handleRetry = (fileStatus: FileStatus) => {
     updateFileStatus(fileStatus.id, {
@@ -204,9 +221,8 @@ export default function Home() {
       error: undefined,
       statusMessage: undefined,
     })
-    // 바로 재처리 시작
     const updatedFile = { ...fileStatus, status: 'pending' as const, progress: 0, error: undefined, statusMessage: undefined }
-    processFile(updatedFile)
+    processFilesSequentially([updatedFile])
   }
 
   const updateFileStatus = (id: string, updates: Partial<FileStatus>) => {
@@ -242,7 +258,7 @@ export default function Home() {
 
   const handleStartOCR = () => {
     const pendingFiles = files.filter((file) => file.status === 'pending')
-    pendingFiles.forEach((fileStatus) => processFile(fileStatus))
+    processFilesSequentially(pendingFiles)
   }
 
   const handleRemoveAllPending = () => {
@@ -260,7 +276,7 @@ export default function Home() {
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
             Google Vision API를 활용하여 PDF 문서를 OCR 처리하고,
             <br />
-            자동으로 <span className="font-semibold text-primary-600">"원본파일명_OCR.pdf"</span> 형식으로 변경합니다
+            자동으로 <span className="font-semibold text-primary-600">&quot;원본파일명_OCR.pdf&quot;</span> 형식으로 변경합니다
           </p>
         </div>
 
@@ -287,9 +303,17 @@ export default function Home() {
                     </button>
                     <button
                       onClick={handleStartOCR}
-                      className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium shadow-md hover:shadow-lg"
+                      disabled={isProcessing}
+                      className={`px-6 py-2 text-white rounded-lg transition-colors font-medium shadow-md hover:shadow-lg ${
+                        isProcessing
+                          ? 'bg-gray-400 cursor-not-allowed'
+                          : 'bg-green-600 hover:bg-green-700'
+                      }`}
                     >
-                      OCR 시작 ({files.filter(f => f.status === 'pending').length}개)
+                      {isProcessing
+                        ? 'OCR 처리 중...'
+                        : `OCR 시작 (${files.filter(f => f.status === 'pending').length}개)`
+                      }
                     </button>
                   </>
                 )}
@@ -303,6 +327,16 @@ export default function Home() {
                 )}
               </div>
             </div>
+
+            {/* 순차 처리 안내 */}
+            {isProcessing && (
+              <div className="mb-4 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-sm text-blue-700">
+                  서버 메모리 보호를 위해 파일을 <span className="font-semibold">1개씩 순차적으로</span> 처리합니다.
+                </p>
+              </div>
+            )}
+
             <FileList
               files={files}
               onDownload={handleDownload}
@@ -318,26 +352,16 @@ export default function Home() {
             <h3 className="text-xl font-bold text-gray-800 mb-4">사용 방법</h3>
             <ol className="list-decimal list-inside space-y-3 text-gray-600">
               <li>위의 업로드 영역에 PDF 파일을 드래그하거나 클릭하여 선택하세요</li>
-              <li>최대 20개, 개당 100MB 이하의 파일을 업로드할 수 있습니다</li>
+              <li>최대 20개, 개당 50MB 이하의 파일을 업로드할 수 있습니다</li>
               <li>업로드된 파일 목록을 확인하고 원하지 않는 파일은 제거할 수 있습니다</li>
-              <li>"OCR 시작" 버튼을 눌러 처리를 시작하면, 진행 상황을 실시간으로 확인할 수 있습니다</li>
+              <li>&quot;OCR 시작&quot; 버튼을 눌러 처리를 시작하면, 진행 상황을 실시간으로 확인할 수 있습니다</li>
+              <li>서버 보호를 위해 파일은 1개씩 순차적으로 처리됩니다</li>
               <li>처리가 완료되면 개별 다운로드 또는 전체 다운로드가 가능합니다</li>
-              <li>모든 파일은 <span className="font-semibold">"원본파일명_OCR.pdf"</span> 형식으로 저장됩니다</li>
+              <li>모든 파일은 <span className="font-semibold">&quot;원본파일명_OCR.pdf&quot;</span> 형식으로 저장됩니다</li>
             </ol>
           </div>
         )}
       </div>
     </main>
   )
-}
-
-// Helper functions
-function base64ToBlob(base64: string, mimeType: string): Blob {
-  const byteCharacters = atob(base64)
-  const byteNumbers = new Array(byteCharacters.length)
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i)
-  }
-  const byteArray = new Uint8Array(byteNumbers)
-  return new Blob([byteArray], { type: mimeType })
 }

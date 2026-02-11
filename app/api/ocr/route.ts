@@ -50,7 +50,16 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // File → Buffer 변환
+    // 파일 크기 체크 (무료 플랜 메모리 제한 대응: 50MB 이하만 허용)
+    const fileSizeMB = file.size / (1024 * 1024)
+    if (fileSizeMB > 50) {
+      return NextResponse.json(
+        { error: `파일 크기(${fileSizeMB.toFixed(1)}MB)가 너무 큽니다. 50MB 이하의 파일만 처리할 수 있습니다.` },
+        { status: 413 }
+      )
+    }
+
+    // File → Buffer 변환 후 즉시 참조 해제
     const arrayBuffer = await file.arrayBuffer()
     const pdfBuffer = Buffer.from(arrayBuffer)
 
@@ -63,42 +72,42 @@ export async function POST(request: NextRequest) {
     // 입력 PDF를 임시 파일로 저장
     await writeFile(inputPath, pdfBuffer)
 
-    // ocrmypdf 실행: Google Vision API 플러그인 사용
+    // ocrmypdf 실행: 메모리 최적화 플래그 적용
     const pluginPath = path.join(process.cwd(), 'ocr_plugin.py')
     const command = [
       'ocrmypdf',
       `--plugin "${pluginPath}"`,  // Google Vision API OCR 엔진
       '--force-ocr',               // 강제 OCR 적용
       '--optimize 1',              // PDF 최적화
-      '--clean',                   // 이미지 노이즈 제거
-      '--deskew',                  // 기울기 자동 보정
-      '--skip-big 100',            // 초대형 이미지 건너뜀
+      '--skip-big 50',             // 50메가픽셀 이상 이미지 건너뜀 (메모리 절약)
+      '--output-type pdf',         // 출력 형식 명시
+      '--jpeg-quality 80',         // JPEG 품질 (메모리 절약)
       `"${inputPath}"`,
       `"${outputPath}"`,
     ].join(' ')
 
     await execAsync(command, {
       timeout: 300000, // 5분 타임아웃
-      maxBuffer: 100 * 1024 * 1024, // 100MB (대용량 PDF 처리)
+      maxBuffer: 10 * 1024 * 1024, // 10MB (stdout/stderr 로그용이므로 충분)
       env: {
         ...process.env,
         GOOGLE_VISION_API_KEY: apiKey,
       },
     })
 
-    // 출력 PDF 읽기
+    // 출력 PDF를 바이너리로 직접 응답 (Base64 인코딩 제거 → 메모리 ~33% 절약)
     const outputBuffer = await readFile(outputPath)
-    const processedPdfBase64 = outputBuffer.toString('base64')
-
-    // 새 파일명 생성
     const newFileName = generateOCRFileName(originalFileName)
 
-    return NextResponse.json({
-      success: true,
-      newFileName,
-      processedPdfBase64,
-      extractedText:
-        'OCR 처리가 완료되었습니다. 다운로드된 PDF에서 텍스트를 드래그하여 확인하세요.',
+    // 바이너리 PDF 스트림으로 응답 (JSON + Base64 대신)
+    return new Response(outputBuffer, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(newFileName)}`,
+        'Content-Length': String(outputBuffer.length),
+        'X-OCR-FileName': encodeURIComponent(newFileName),
+      },
     })
   } catch (error) {
     console.error('OCR 처리 오류:', error)
@@ -116,6 +125,8 @@ export async function POST(request: NextRequest) {
           'OCR 처리 시간이 초과되었습니다. 더 작은 파일로 시도해주세요.'
       } else if (errorMessage.includes('GOOGLE_VISION_API_KEY')) {
         errorMessage = 'Google Vision API 키가 설정되지 않았습니다.'
+      } else if (errorMessage.includes('MemoryError') || errorMessage.includes('ENOMEM') || errorMessage.includes('Killed')) {
+        errorMessage = '서버 메모리가 부족합니다. 더 작은 파일(10페이지 이하)로 시도해주세요.'
       }
 
       return NextResponse.json({ error: errorMessage }, { status: 500 })
