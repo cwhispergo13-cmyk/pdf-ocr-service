@@ -6,9 +6,10 @@ interface FileListProps {
   files: FileStatus[]
   onDownload: (file: FileStatus) => void
   onRemove: (id: string) => void
+  onRetry: (file: FileStatus) => void
 }
 
-export default function FileList({ files, onDownload, onRemove }: FileListProps) {
+export default function FileList({ files, onDownload, onRemove, onRetry }: FileListProps) {
   return (
     <div className="space-y-4">
       {files.map((file) => (
@@ -17,6 +18,7 @@ export default function FileList({ files, onDownload, onRemove }: FileListProps)
           file={file}
           onDownload={onDownload}
           onRemove={onRemove}
+          onRetry={onRetry}
         />
       ))}
     </div>
@@ -27,9 +29,10 @@ interface FileItemProps {
   file: FileStatus
   onDownload: (file: FileStatus) => void
   onRemove: (id: string) => void
+  onRetry: (file: FileStatus) => void
 }
 
-function FileItem({ file, onDownload, onRemove }: FileItemProps) {
+function FileItem({ file, onDownload, onRemove, onRetry }: FileItemProps) {
   const getStatusIcon = () => {
     switch (file.status) {
       case 'pending':
@@ -62,7 +65,7 @@ function FileItem({ file, onDownload, onRemove }: FileItemProps) {
       case 'pending':
         return 'OCR 대기 중 (제거 가능)'
       case 'processing':
-        return 'OCR 처리 중...'
+        return file.statusMessage || 'OCR 처리 중...'
       case 'completed':
         return '완료'
       case 'error':
@@ -99,7 +102,15 @@ function FileItem({ file, onDownload, onRemove }: FileItemProps) {
               {getStatusText()}
             </p>
             {file.error && (
-              <p className="text-sm text-red-600 mt-1">오류: {file.error}</p>
+              <div className="mt-1">
+                <p className="text-sm text-red-600">오류: {file.error}</p>
+                <button
+                  onClick={() => onRetry(file)}
+                  className="mt-2 px-4 py-1.5 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium shadow-sm hover:shadow-md"
+                >
+                  다시 시도
+                </button>
+              </div>
             )}
           </div>
         </div>
