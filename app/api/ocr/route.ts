@@ -50,16 +50,16 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 파일 크기 체크 (무료 플랜 메모리 제한 대응: 50MB 이하만 허용)
+    // 파일 크기 체크 (무료 플랜 메모리 512MB 대응: 20MB 이하만 허용)
     const fileSizeMB = file.size / (1024 * 1024)
-    if (fileSizeMB > 50) {
+    if (fileSizeMB > 20) {
       return NextResponse.json(
-        { error: `파일 크기(${fileSizeMB.toFixed(1)}MB)가 너무 큽니다. 50MB 이하의 파일만 처리할 수 있습니다.` },
+        { error: `파일 크기(${fileSizeMB.toFixed(1)}MB)가 너무 큽니다. 20MB 이하의 파일만 처리할 수 있습니다.` },
         { status: 413 }
       )
     }
 
-    // File → Buffer 변환 후 즉시 참조 해제
+    // File → Buffer 변환
     const arrayBuffer = await file.arrayBuffer()
     const pdfBuffer = Buffer.from(arrayBuffer)
 
@@ -72,23 +72,25 @@ export async function POST(request: NextRequest) {
     // 입력 PDF를 임시 파일로 저장
     await writeFile(inputPath, pdfBuffer)
 
-    // ocrmypdf 실행: 메모리 최적화 플래그 적용
+    // ocrmypdf 실행: 극한 메모리 최적화
     const pluginPath = path.join(process.cwd(), 'ocr_plugin.py')
     const command = [
       'ocrmypdf',
       `--plugin "${pluginPath}"`,  // Google Vision API OCR 엔진
       '--force-ocr',               // 강제 OCR 적용
-      '--optimize 1',              // PDF 최적화
-      '--skip-big 50',             // 50메가픽셀 이상 이미지 건너뜀 (메모리 절약)
+      '-j 1',                      // ★ 핵심: 1페이지씩 순차 처리 (병렬 금지 → 메모리 대폭 절약)
+      '--optimize 0',              // ★ 최적화 단계 건너뛰기 (추가 메모리 사용 방지)
       '--output-type pdf',         // 출력 형식 명시
-      '--jpeg-quality 80',         // JPEG 품질 (메모리 절약)
+      '--skip-big 25',             // 25메가픽셀 이상 이미지 건너뜀
+      '--jpeg-quality 60',         // JPEG 품질 낮춤 (중간 파일 크기 감소)
+      '--fast-web-view 0',         // Fast Web View 비활성화 (메모리 절약)
       `"${inputPath}"`,
       `"${outputPath}"`,
     ].join(' ')
 
     await execAsync(command, {
-      timeout: 300000, // 5분 타임아웃
-      maxBuffer: 10 * 1024 * 1024, // 10MB (stdout/stderr 로그용이므로 충분)
+      timeout: 600000, // 10분 타임아웃 (순차 처리라 더 오래 걸림)
+      maxBuffer: 5 * 1024 * 1024, // 5MB (로그용)
       env: {
         ...process.env,
         GOOGLE_VISION_API_KEY: apiKey,

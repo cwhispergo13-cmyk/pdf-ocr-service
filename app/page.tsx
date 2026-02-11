@@ -352,7 +352,7 @@ export default function Home() {
             <h3 className="text-xl font-bold text-gray-800 mb-4">사용 방법</h3>
             <ol className="list-decimal list-inside space-y-3 text-gray-600">
               <li>위의 업로드 영역에 PDF 파일을 드래그하거나 클릭하여 선택하세요</li>
-              <li>최대 20개, 개당 50MB 이하의 파일을 업로드할 수 있습니다</li>
+              <li>최대 20개, 개당 20MB 이하의 파일을 업로드할 수 있습니다</li>
               <li>업로드된 파일 목록을 확인하고 원하지 않는 파일은 제거할 수 있습니다</li>
               <li>&quot;OCR 시작&quot; 버튼을 눌러 처리를 시작하면, 진행 상황을 실시간으로 확인할 수 있습니다</li>
               <li>서버 보호를 위해 파일은 1개씩 순차적으로 처리됩니다</li>

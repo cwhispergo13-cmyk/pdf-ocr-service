@@ -3,7 +3,7 @@
 import { useCallback, useState } from 'react'
 
 const MAX_FILES = 20
-const MAX_FILE_SIZE_MB = 50  // 서버 메모리 제한 대응 (Render 무료 플랜 512MB)
+const MAX_FILE_SIZE_MB = 20  // 서버 메모리 제한 대응 (Render 무료 플랜 512MB)
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 interface FileUploaderProps {
