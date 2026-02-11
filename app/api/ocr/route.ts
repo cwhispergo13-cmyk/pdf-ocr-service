@@ -50,11 +50,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 파일 크기 체크 (무료 플랜 메모리 512MB 대응: 20MB 이하만 허용)
+    // 파일 크기 체크 (서버 안정성: 10MB 이하 권장)
     const fileSizeMB = file.size / (1024 * 1024)
-    if (fileSizeMB > 20) {
+    if (fileSizeMB > 10) {
       return NextResponse.json(
-        { error: `파일 크기(${fileSizeMB.toFixed(1)}MB)가 너무 큽니다. 20MB 이하의 파일만 처리할 수 있습니다.` },
+        { error: `파일 크기(${fileSizeMB.toFixed(1)}MB)가 큽니다. 10MB 이하·5페이지 이하 PDF로 나누어 시도해 주세요.` },
         { status: 413 }
       )
     }
