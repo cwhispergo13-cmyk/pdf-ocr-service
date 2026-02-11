@@ -1,14 +1,11 @@
 FROM node:20-slim
 
-# Install Python, Tesseract OCR, Ghostscript (메모리 최적화: unpaper, pngquant 제거)
+# Google Vision 플러그인만 사용 → Tesseract 제거로 apt 설치 시간 대폭 단축
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
-    tesseract-ocr \
-    tesseract-ocr-kor \
-    tesseract-ocr-eng \
     ghostscript \
-    && pip3 install --break-system-packages ocrmypdf requests \
+    && pip3 install --break-system-packages --no-cache-dir ocrmypdf requests \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
