@@ -19,6 +19,11 @@ function generateOCRFileName(originalFileName: string): string {
   return `${nameWithoutExt}_OCR.pdf`
 }
 
+// 서버 헬스체크용 GET 엔드포인트 (서버 깨우기 + 상태 확인)
+export async function GET() {
+  return NextResponse.json({ status: 'ok', timestamp: Date.now() })
+}
+
 export async function POST(request: NextRequest) {
   let inputPath = ''
   let outputPath = ''

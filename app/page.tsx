@@ -20,48 +20,125 @@ export default function Home() {
     setFiles((prev) => [...prev, ...newFiles])
   }
 
+  // 서버 깨우기 (Render 무료 플랜: 15분 미사용 시 서버 슬립)
+  const wakeUpServer = async (): Promise<boolean> => {
+    try {
+      const response = await fetch('/api/ocr', { method: 'GET' })
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+
+  // 안전한 JSON 파싱 (빈 응답이나 HTML 에러 페이지 대응)
+  const safeJsonParse = async (response: Response): Promise<{ data: Record<string, unknown> | null; text: string }> => {
+    const text = await response.text()
+    try {
+      const data = JSON.parse(text)
+      return { data, text }
+    } catch {
+      return { data: null, text }
+    }
+  }
+
+  // 사용자 친화적 에러 메시지 변환
+  const getFriendlyErrorMessage = (text: string, status: number): string => {
+    if (status === 502 || status === 503 || status === 504) {
+      return '서버가 일시적으로 응답하지 않습니다. 잠시 후 다시 시도해주세요. (Render 무료 서버는 15분 미사용 시 잠들 수 있습니다)'
+    }
+    if (status === 413) {
+      return '파일 크기가 서버 허용 한도를 초과했습니다. 더 작은 파일로 시도해주세요.'
+    }
+    if (text.includes('<!DOCTYPE') || text.includes('<html')) {
+      return '서버가 정상적으로 응답하지 않았습니다. 잠시 후 다시 시도해주세요.'
+    }
+    if (text === '' || text.length === 0) {
+      return '서버로부터 빈 응답을 받았습니다. 서버가 잠들어 있을 수 있으니 잠시 후 다시 시도해주세요.'
+    }
+    return `서버 오류 (${status}): 잠시 후 다시 시도해주세요.`
+  }
+
   const processFile = async (fileStatus: FileStatus) => {
     try {
       // 상태를 processing으로 변경
-      updateFileStatus(fileStatus.id, { status: 'processing', progress: 10 })
+      updateFileStatus(fileStatus.id, { status: 'processing', progress: 5 })
 
-      // FormData로 파일 전송 (Base64 대신 multipart 방식)
+      // 1단계: 서버 깨우기 (슬립 상태일 수 있으므로)
+      updateFileStatus(fileStatus.id, { progress: 8 })
+      const isServerAwake = await wakeUpServer()
+      if (!isServerAwake) {
+        // 서버가 안 깨어나면 한번 더 시도 (콜드 스타트에 30~60초 소요)
+        updateFileStatus(fileStatus.id, { progress: 10 })
+        await new Promise(resolve => setTimeout(resolve, 3000))
+        const retryWake = await wakeUpServer()
+        if (!retryWake) {
+          throw new Error('서버가 응답하지 않습니다. Render 무료 서버가 잠들어 있을 수 있습니다. 1~2분 후 다시 시도해주세요.')
+        }
+      }
+
+      // 2단계: FormData로 파일 전송
+      updateFileStatus(fileStatus.id, { progress: 15 })
       const formData = new FormData()
       formData.append('file', fileStatus.originalFile)
       formData.append('originalFileName', fileStatus.originalName)
 
       updateFileStatus(fileStatus.id, { progress: 30 })
 
-      // OCR API 호출
-      const response = await fetch('/api/ocr', {
-        method: 'POST',
-        body: formData,
-      })
+      // 3단계: OCR API 호출 (최대 2회 시도)
+      let response: Response | null = null
+      let lastError = ''
+
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          response = await fetch('/api/ocr', {
+            method: 'POST',
+            body: formData,
+          })
+          break // 성공하면 루프 종료
+        } catch (fetchError) {
+          lastError = fetchError instanceof Error ? fetchError.message : '네트워크 오류'
+          if (attempt < 2) {
+            updateFileStatus(fileStatus.id, { progress: 25 })
+            await new Promise(resolve => setTimeout(resolve, 3000))
+          }
+        }
+      }
+
+      if (!response) {
+        throw new Error(`서버 연결에 실패했습니다: ${lastError}. 인터넷 연결을 확인하고 다시 시도해주세요.`)
+      }
 
       updateFileStatus(fileStatus.id, { progress: 70 })
 
+      // 4단계: 안전한 응답 파싱
+      const { data, text } = await safeJsonParse(response)
+
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'OCR 처리 실패')
+        if (data && typeof data === 'object' && 'error' in data) {
+          throw new Error(String(data.error))
+        }
+        throw new Error(getFriendlyErrorMessage(text, response.status))
       }
 
-      const result = await response.json()
-      
-      // OCR이 완료된 PDF를 Blob으로 변환
-      const pdfBlob = base64ToBlob(result.processedPdfBase64, 'application/pdf')
+      if (!data) {
+        throw new Error(getFriendlyErrorMessage(text, response.status))
+      }
+
+      // 5단계: OCR 완료된 PDF를 Blob으로 변환
+      const pdfBlob = base64ToBlob(String(data.processedPdfBase64), 'application/pdf')
       
       updateFileStatus(fileStatus.id, {
         status: 'completed',
         progress: 100,
-        newName: result.newFileName,
+        newName: String(data.newFileName),
         processedBlob: pdfBlob,
-        extractedText: result.extractedText,
+        extractedText: String(data.extractedText),
       })
     } catch (error) {
       console.error('파일 처리 오류:', error)
       updateFileStatus(fileStatus.id, {
         status: 'error',
-        error: error instanceof Error ? error.message : '알 수 없는 오류',
+        error: error instanceof Error ? error.message : '알 수 없는 오류가 발생했습니다',
       })
     }
   }
