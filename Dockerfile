@@ -1,9 +1,12 @@
 FROM node:20-slim
 
-# Google Vision 플러그인만 사용 → Tesseract 제거로 apt 설치 시간 대폭 단축
+# ocrmypdf 구동에 Tesseract 필요 (플러그인 사용 시에도 방향/기울기 등에서 참조할 수 있음)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
+    tesseract-ocr \
+    tesseract-ocr-kor \
+    tesseract-ocr-eng \
     ghostscript \
     && pip3 install --break-system-packages --no-cache-dir ocrmypdf requests \
     && apt-get clean \
