@@ -1,16 +1,25 @@
+# Render에서 "Timed out" 시: Dashboard → Service → Settings → Build & Deploy
+# 에서 Build timeout(또는 Max build duration)을 25분 등으로 늘려 주세요.
+# BuildKit 사용 (캐시 마운트로 재빌드 시 apt/pip 단계 대폭 단축)
+# syntax=docker/dockerfile:1
 FROM node:20-slim
 
-# ocrmypdf 구동에 Tesseract 필요 (플러그인 사용 시에도 방향/기울기 등에서 참조할 수 있음)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt 캐시 마운트 → 두 번째 빌드부터 이 단계가 훨씬 빨라짐
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     tesseract-ocr \
     tesseract-ocr-kor \
     tesseract-ocr-eng \
     ghostscript \
-    && pip3 install --break-system-packages --no-cache-dir ocrmypdf requests \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# pip 캐시 마운트 → 재빌드 시 패키지 재다운로드 생략
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install --break-system-packages ocrmypdf requests
 
 # NODE_OPTIONS는 빌드 시 제거 → Next.js 빌드가 충분한 메모리 사용 가능
 # 실행 시에만 메모리 제한 적용 (CMD에서 설정)
