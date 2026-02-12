@@ -50,11 +50,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 파일 크기 체크 (서버 안정성: 10MB 이하 권장)
+    // 파일 크기 체크: 개당 최대 20MB
     const fileSizeMB = file.size / (1024 * 1024)
-    if (fileSizeMB > 10) {
+    if (fileSizeMB > 20) {
       return NextResponse.json(
-        { error: `파일 크기(${fileSizeMB.toFixed(1)}MB)가 큽니다. 10MB 이하·5페이지 이하 PDF로 나누어 시도해 주세요.` },
+        { error: `파일 크기(${fileSizeMB.toFixed(1)}MB)가 너무 큽니다. 파일당 20MB 이하만 가능합니다.` },
         { status: 413 }
       )
     }

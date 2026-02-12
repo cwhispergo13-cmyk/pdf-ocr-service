@@ -62,7 +62,7 @@ export default function Home() {
     const status = response.status
 
     if (status === 502 || status === 503 || status === 504) {
-      return 'OCR 처리 중 서버가 중단되었을 수 있습니다. 1~2분 기다린 뒤, 5페이지 이하·10MB 이하 PDF로 "다시 시도" 해 주세요.'
+      return 'OCR 처리 중 서버가 중단되었을 수 있습니다. 1~2분 기다린 뒤 "다시 시도" 해 주세요.'
     }
     if (status === 413) {
       return '파일 크기가 서버 허용 한도를 초과했습니다. 더 작은 파일로 시도해주세요.'
@@ -352,7 +352,7 @@ export default function Home() {
             <h3 className="text-xl font-bold text-gray-800 mb-4">사용 방법</h3>
             <ol className="list-decimal list-inside space-y-3 text-gray-600">
               <li>위의 업로드 영역에 PDF 파일을 드래그하거나 클릭하여 선택하세요</li>
-              <li>최대 20개, 개당 10MB 이하(5페이지 이하 권장) 파일을 업로드할 수 있습니다</li>
+              <li>최대 20개, 개당 20MB 이하의 파일을 업로드할 수 있습니다</li>
               <li>업로드된 파일 목록을 확인하고 원하지 않는 파일은 제거할 수 있습니다</li>
               <li>&quot;OCR 시작&quot; 버튼을 눌러 처리를 시작하면, 진행 상황을 실시간으로 확인할 수 있습니다</li>
               <li>서버 보호를 위해 파일은 1개씩 순차적으로 처리됩니다</li>
